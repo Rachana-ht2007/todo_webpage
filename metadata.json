@@ -2,5 +2,7 @@
   "name": "Stillwater",
   "description": "A calm, mindful To-Do planner with split-focus wellness tracking and full Supabase CRUD persistence.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
