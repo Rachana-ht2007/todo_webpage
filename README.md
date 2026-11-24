@@ -1,7 +1,7 @@
 # Stillwater — Mindful Task Planner
 # Stillwater — Mindful CRUD To-Do List
 
-**Live Application:** [https://stillwater-7083.ai.studio](https://stillwater-7083.ai.studio)
+**Live Application:** https://stillwater-7083.ai.studio
 
 Stillwater is a calm, responsive To-Do List web application built with full **CRUD (Create, Read, Update, Delete)** functionality and backed by a **Supabase** PostgreSQL database.
 
