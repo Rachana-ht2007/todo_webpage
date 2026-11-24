@@ -7,6 +7,8 @@ import {
   Undo2,
   ArrowUpDown,
   AlertCircle,
+  LogOut,
+  User,
 } from 'lucide-react';
 import {
   CategoryFilter,
@@ -31,6 +33,7 @@ import { TaskCard } from './components/TaskCard';
 import { EditTaskDrawer } from './components/EditTaskDrawer';
 import { EmptyTasksState } from './components/EmptyTasksState';
 import { TaskListSkeleton } from './components/TaskListSkeleton';
+import { AuthScreen } from './components/AuthScreen';
 
 const CATEGORY_TABS: CategoryFilter[] = ['All', 'Personal', 'Wellness', 'Study', 'Project'];
 const STATUS_TABS: StatusFilter[] = ['All', 'Active', 'Completed'];
@@ -46,7 +49,22 @@ interface UndoBannerState {
   removedTodos: Todo[];
 }
 
+const USER_STORAGE_KEY = 'stillwater_current_user';
+
+const readStoredUser = (): string | null => {
+  try {
+    const raw = localStorage.getItem(USER_STORAGE_KEY);
+    if (!raw) return null;
+    const normalized = raw.trim().toLowerCase();
+    return normalized || null;
+  } catch {
+    return null;
+  }
+};
+
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<string | null>(() => readStoredUser());
+
   const [todos, setTodos] = useState<Todo[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -64,12 +82,12 @@ export default function App() {
   const composerInputRef = useRef<HTMLInputElement | null>(null);
   const undoTimerRef = useRef<number | null>(null);
 
-  const loadTasks = useCallback(async () => {
+  const loadTasks = useCallback(async (userKey: string) => {
     setLoading(true);
     setErrorMsg(null);
     setIsMissingTable(false);
     try {
-      const data = await fetchTodos();
+      const data = await fetchTodos(userKey);
       setTodos(data);
     } catch (err) {
       const typed = err as Error & { isMissingTable?: boolean };
@@ -81,11 +99,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    loadTasks();
+    if (!currentUser) {
+      setTodos([]);
+      setLoading(false);
+      return;
+    }
+    loadTasks(currentUser);
+  }, [currentUser, loadTasks]);
+
+  useEffect(() => {
     return () => {
       if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
     };
-  }, [loadTasks]);
+  }, []);
 
   const showUndoToast = (message: string, removedTodos: Todo[]) => {
     if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
@@ -95,10 +121,38 @@ export default function App() {
     }, 6000);
   };
 
+  const handleLogin = (normalizedUserKey: string) => {
+    try {
+      localStorage.setItem(USER_STORAGE_KEY, normalizedUserKey);
+    } catch {
+      // Ignore storage quota errors
+    }
+    setSearchQuery('');
+    setStatusFilter('All');
+    setCategoryFilter('All');
+    setCurrentUser(normalizedUserKey);
+  };
+
+  const handleLogOut = () => {
+    if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
+    try {
+      localStorage.removeItem(USER_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+    setUndoState(null);
+    setEditingTodo(null);
+    setErrorMsg(null);
+    setSearchQuery('');
+    setTodos([]);
+    setCurrentUser(null);
+  };
+
   const handleAddTask = async (input: CreateTodoInput) => {
+    if (!currentUser) return;
     setErrorMsg(null);
     try {
-      const created = await createTodo(input);
+      const created = await createTodo(input, currentUser);
       setTodos((prev) => [created, ...prev]);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to save task.');
@@ -106,17 +160,16 @@ export default function App() {
   };
 
   const handleToggleTodo = async (todo: Todo) => {
+    if (!currentUser) return;
     const nextCompleted = !todo.is_completed;
-    // Optimistic update
     setTodos((prev) =>
       prev.map((item) =>
         item.id === todo.id ? { ...item, is_completed: nextCompleted } : item
       )
     );
     try {
-      await updateTodo(todo.id, { is_completed: nextCompleted });
+      await updateTodo(todo.id, { is_completed: nextCompleted }, currentUser);
     } catch (err) {
-      // Revert on failure
       setTodos((prev) =>
         prev.map((item) =>
           item.id === todo.id ? { ...item, is_completed: todo.is_completed } : item
@@ -127,15 +180,17 @@ export default function App() {
   };
 
   const handleSaveEdit = async (id: string, updates: UpdateTodoInput) => {
-    const updated = await updateTodo(id, updates);
+    if (!currentUser) return;
+    const updated = await updateTodo(id, updates, currentUser);
     setTodos((prev) => prev.map((item) => (item.id === id ? updated : item)));
   };
 
   const handleDeleteTodo = async (todo: Todo) => {
+    if (!currentUser) return;
     const snapshot = todos;
     setTodos((prev) => prev.filter((item) => item.id !== todo.id));
     try {
-      await deleteTodo(todo.id);
+      await deleteTodo(todo.id, currentUser);
       showUndoToast(`Removed "${todo.title}"`, [todo]);
     } catch (err) {
       setTodos(snapshot);
@@ -144,13 +199,14 @@ export default function App() {
   };
 
   const handleClearCompleted = async () => {
+    if (!currentUser) return;
     const completedItems = todos.filter((t) => t.is_completed);
     if (completedItems.length === 0) return;
 
     const snapshot = todos;
     setTodos((prev) => prev.filter((t) => !t.is_completed));
     try {
-      await clearCompletedTodos();
+      await clearCompletedTodos(currentUser);
       showUndoToast(
         `Cleared ${completedItems.length} completed ${completedItems.length === 1 ? 'task' : 'tasks'}`,
         completedItems
@@ -162,13 +218,13 @@ export default function App() {
   };
 
   const handleUndoDelete = async () => {
-    if (!undoState) return;
+    if (!undoState || !currentUser) return;
     const toRestore = undoState.removedTodos;
     setUndoState(null);
     if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
 
     try {
-      const restored = await restoreTodos(toRestore);
+      const restored = await restoreTodos(toRestore, currentUser);
       setTodos((prev) => {
         const existingIds = new Set(prev.map((t) => t.id));
         const uniqueRestored = restored.filter((t) => !existingIds.has(t.id));
@@ -244,11 +300,15 @@ export default function App() {
   const hasSearchOrCategoryFilter =
     categoryFilter !== 'All' || searchQuery.trim().length > 0;
 
+  if (!currentUser) {
+    return <AuthScreen onLogin={handleLogin} />;
+  }
+
   return (
     <div className="min-h-screen bg-[#FAF9F6] text-[#242B28] flex flex-col">
-      {/* Top Navigation Bar (3-Zone Contract) */}
+      {/* Top Navigation Bar */}
       <header className="border-b border-[#E8ECE9] bg-[#FAF9F6]/90 backdrop-blur-sm sticky top-0 z-30">
-        <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-10 h-16 flex items-center justify-between gap-8">
+        <div className="max-w-[1320px] mx-auto px-4 sm:px-6 lg:px-10 h-16 flex items-center justify-between gap-4 sm:gap-8">
           {/* Zone 1: Single text wordmark */}
           <a
             href="#top"
@@ -291,8 +351,23 @@ export default function App() {
             </button>
           </nav>
 
-          {/* Zone 3: 1 Primary Action */}
-          <div className="flex items-center shrink-0">
+          {/* Zone 3: Logged-in User + Log Out + Primary New Task Action */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            <div className="hidden sm:inline-flex items-center gap-1.5 text-xs text-[#5A6560] pr-1">
+              <User className="w-3.5 h-3.5 text-[#6A8C7D] shrink-0" aria-hidden="true" />
+              <span className="max-w-[160px] lg:max-w-[220px] truncate" title={currentUser}>
+                {currentUser}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogOut}
+              aria-label="Log out"
+              className="inline-flex items-center gap-1.5 px-3 py-2 min-h-[40px] rounded-xl border border-[#DCE2DE] bg-white hover:bg-[#F4F6F4] text-[#4E5A55] hover:text-[#1E2522] text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8B7EB8] whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Log Out</span>
+            </button>
             <button
               type="button"
               onClick={focusComposer}
@@ -347,7 +422,7 @@ export default function App() {
             <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={loadTasks}
+                onClick={() => currentUser && loadTasks(currentUser)}
                 className="min-h-[36px] px-3 py-1.5 rounded-lg bg-[#7A3730] text-white text-xs font-medium hover:opacity-90 transition-opacity cursor-pointer"
               >
                 Retry
@@ -524,8 +599,9 @@ export default function App() {
 
       {/* Quiet Footer */}
       <footer className="mt-12 border-t border-[#E8ECE9] py-6 px-4 sm:px-6 lg:px-10">
-        <div className="max-w-[1320px] mx-auto flex items-center justify-between gap-3 text-xs text-[#64706A]">
+        <div className="max-w-[1320px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-[#64706A]">
           <p>Stillwater — Mindful daily planning</p>
+          <p className="sm:hidden truncate max-w-full">Logged in as {currentUser}</p>
         </div>
       </footer>
 

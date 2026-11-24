@@ -6,6 +6,7 @@ export type SortOption = 'created' | 'priority' | 'due_date';
 
 export interface Todo {
   id: string;
+  user_key: string;
   title: string;
   description: string;
   category: TodoCategory;

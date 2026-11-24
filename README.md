@@ -27,6 +27,7 @@ A calm, visually nourishing To-Do application with an asymmetric split-focus lay
 ```sql
 CREATE TABLE IF NOT EXISTS public.todos (
   id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_key text NOT NULL,
   title text NOT NULL,
   description text DEFAULT '',
   category text NOT NULL DEFAULT 'Personal' CHECK (category IN ('Study', 'Personal', 'Wellness', 'Project')),
@@ -36,10 +37,11 @@ CREATE TABLE IF NOT EXISTS public.todos (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE INDEX IF NOT EXISTS todos_user_key_idx ON public.todos (user_key);
+
 ALTER TABLE public.todos ENABLE ROW LEVEL SECURITY;
 
--- Demo policy allowing anonymous client CRUD (replace with auth.uid() policies for multi-user apps)
-CREATE POLICY "Allow anonymous demo access" ON public.todos
+CREATE POLICY "Allow client CRUD by user_key" ON public.todos
   FOR ALL
   USING (true)
   WITH CHECK (true);

@@ -1,9 +1,9 @@
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 import { CreateTodoInput, Todo, UpdateTodoInput } from '../types/todo';
 
-const LOCAL_STORAGE_KEY = 'stillwater_todos_v1';
+const LOCAL_STORAGE_PREFIX = 'stillwater_todos_v3_';
 
-const createStarterTodos = (): Todo[] => {
+const createStarterTodos = (userKey: string): Todo[] => {
   const today = new Date();
   const formatDate = (offsetDays: number) => {
     const d = new Date(today);
@@ -14,6 +14,7 @@ const createStarterTodos = (): Todo[] => {
   return [
     {
       id: 'starter-1',
+      user_key: userKey,
       title: 'Morning stretch & ten minutes of quiet breathwork',
       description: 'Open the window for fresh air before checking messages.',
       category: 'Wellness',
@@ -24,6 +25,7 @@ const createStarterTodos = (): Todo[] => {
     },
     {
       id: 'starter-2',
+      user_key: userKey,
       title: 'Review research notes on atmospheric design systems',
       description: 'Summarize key typographic spacing principles for the studio deck.',
       category: 'Study',
@@ -34,6 +36,7 @@ const createStarterTodos = (): Todo[] => {
     },
     {
       id: 'starter-3',
+      user_key: userKey,
       title: 'Refine Q4 product roadmap milestones',
       description: 'Align timeline milestones with engineering and design leads.',
       category: 'Project',
@@ -44,6 +47,7 @@ const createStarterTodos = (): Todo[] => {
     },
     {
       id: 'starter-4',
+      user_key: userKey,
       title: 'Water indoor monstera and olive tree',
       description: 'Check soil moisture and mist leaves lightly.',
       category: 'Personal',
@@ -55,12 +59,13 @@ const createStarterTodos = (): Todo[] => {
   ];
 };
 
-const readLocalTodos = (): Todo[] => {
+const readLocalTodos = (userKey: string): Todo[] => {
   try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    const key = `${LOCAL_STORAGE_PREFIX}${userKey}`;
+    const raw = localStorage.getItem(key);
     if (!raw) {
-      const starter = createStarterTodos();
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(starter));
+      const starter = createStarterTodos(userKey);
+      localStorage.setItem(key, JSON.stringify(starter));
       return starter;
     }
     const parsed = JSON.parse(raw);
@@ -70,24 +75,22 @@ const readLocalTodos = (): Todo[] => {
   }
 };
 
-const writeLocalTodos = (todos: Todo[]): void => {
+const writeLocalTodos = (userKey: string, todos: Todo[]): void => {
   try {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(todos));
+    localStorage.setItem(`${LOCAL_STORAGE_PREFIX}${userKey}`, JSON.stringify(todos));
   } catch {
     // Ignore storage quota errors
   }
 };
 
-export interface TodoServiceError {
-  message: string;
-  isMissingTable?: boolean;
-}
+export async function fetchTodos(userKey: string): Promise<Todo[]> {
+  if (!userKey) return [];
 
-export async function fetchTodos(): Promise<Todo[]> {
   if (isSupabaseConfigured && supabase) {
     const { data, error } = await supabase
       .from('todos')
       .select('*')
+      .eq('user_key', userKey)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -104,11 +107,16 @@ export async function fetchTodos(): Promise<Todo[]> {
     return (data ?? []) as Todo[];
   }
 
-  return readLocalTodos();
+  return readLocalTodos(userKey);
 }
 
-export async function createTodo(input: CreateTodoInput): Promise<Todo> {
+export async function createTodo(input: CreateTodoInput, userKey: string): Promise<Todo> {
+  if (!userKey) {
+    throw new Error('Please log in to add tasks.');
+  }
+
   const payload = {
+    user_key: userKey,
     title: input.title.trim(),
     description: (input.description ?? '').trim(),
     category: input.category,
@@ -135,12 +143,20 @@ export async function createTodo(input: CreateTodoInput): Promise<Todo> {
     ...payload,
     created_at: new Date().toISOString(),
   };
-  const current = readLocalTodos();
-  writeLocalTodos([newTodo, ...current]);
+  const current = readLocalTodos(userKey);
+  writeLocalTodos(userKey, [newTodo, ...current]);
   return newTodo;
 }
 
-export async function updateTodo(id: string, updates: UpdateTodoInput): Promise<Todo> {
+export async function updateTodo(
+  id: string,
+  updates: UpdateTodoInput,
+  userKey: string
+): Promise<Todo> {
+  if (!userKey) {
+    throw new Error('Please log in to update tasks.');
+  }
+
   const sanitized: UpdateTodoInput = { ...updates };
   if (sanitized.title !== undefined) sanitized.title = sanitized.title.trim();
   if (sanitized.description !== undefined) sanitized.description = sanitized.description.trim();
@@ -150,6 +166,7 @@ export async function updateTodo(id: string, updates: UpdateTodoInput): Promise<
       .from('todos')
       .update(sanitized)
       .eq('id', id)
+      .eq('user_key', userKey)
       .select()
       .single();
 
@@ -159,10 +176,10 @@ export async function updateTodo(id: string, updates: UpdateTodoInput): Promise<
     return data as Todo;
   }
 
-  const current = readLocalTodos();
+  const current = readLocalTodos(userKey);
   let updatedItem: Todo | null = null;
   const next = current.map((item) => {
-    if (item.id === id) {
+    if (item.id === id && item.user_key === userKey) {
       updatedItem = { ...item, ...sanitized };
       return updatedItem;
     }
@@ -173,42 +190,65 @@ export async function updateTodo(id: string, updates: UpdateTodoInput): Promise<
     throw new Error('Task not found.');
   }
 
-  writeLocalTodos(next);
+  writeLocalTodos(userKey, next);
   return updatedItem;
 }
 
-export async function deleteTodo(id: string): Promise<void> {
+export async function deleteTodo(id: string, userKey: string): Promise<void> {
+  if (!userKey) {
+    throw new Error('Please log in to delete tasks.');
+  }
+
   if (isSupabaseConfigured && supabase) {
-    const { error } = await supabase.from('todos').delete().eq('id', id);
+    const { error } = await supabase
+      .from('todos')
+      .delete()
+      .eq('id', id)
+      .eq('user_key', userKey);
     if (error) {
       throw new Error(error.message);
     }
     return;
   }
 
-  const current = readLocalTodos();
-  writeLocalTodos(current.filter((item) => item.id !== id));
+  const current = readLocalTodos(userKey);
+  writeLocalTodos(
+    userKey,
+    current.filter((item) => !(item.id === id && item.user_key === userKey))
+  );
 }
 
-export async function clearCompletedTodos(): Promise<void> {
+export async function clearCompletedTodos(userKey: string): Promise<void> {
+  if (!userKey) {
+    throw new Error('Please log in to clear completed tasks.');
+  }
+
   if (isSupabaseConfigured && supabase) {
-    const { error } = await supabase.from('todos').delete().eq('is_completed', true);
+    const { error } = await supabase
+      .from('todos')
+      .delete()
+      .eq('is_completed', true)
+      .eq('user_key', userKey);
     if (error) {
       throw new Error(error.message);
     }
     return;
   }
 
-  const current = readLocalTodos();
-  writeLocalTodos(current.filter((item) => !item.is_completed));
+  const current = readLocalTodos(userKey);
+  writeLocalTodos(
+    userKey,
+    current.filter((item) => !item.is_completed)
+  );
 }
 
-export async function restoreTodos(todosToRestore: Todo[]): Promise<Todo[]> {
-  if (todosToRestore.length === 0) return [];
+export async function restoreTodos(todosToRestore: Todo[], userKey: string): Promise<Todo[]> {
+  if (!userKey || todosToRestore.length === 0) return [];
 
   if (isSupabaseConfigured && supabase) {
     const payloads = todosToRestore.map((t) => ({
       id: t.id,
+      user_key: userKey,
       title: t.title,
       description: t.description,
       category: t.category,
@@ -225,9 +265,12 @@ export async function restoreTodos(todosToRestore: Todo[]): Promise<Todo[]> {
     return (data ?? []) as Todo[];
   }
 
-  const current = readLocalTodos();
+  const current = readLocalTodos(userKey);
   const existingIds = new Set(current.map((t) => t.id));
-  const merged = [...todosToRestore.filter((t) => !existingIds.has(t.id)), ...current];
-  writeLocalTodos(merged);
+  const merged = [
+    ...todosToRestore.filter((t) => !existingIds.has(t.id)).map((t) => ({ ...t, user_key: userKey })),
+    ...current,
+  ];
+  writeLocalTodos(userKey, merged);
   return todosToRestore;
 }
